@@ -6,14 +6,21 @@ API sencilla con Node.js + Express preparada para dockerizar. Incluye:
 - `docker-compose.yml` con `env_file`, healthcheck y reinicio automático.
 - Validación de variables de entorno al arrancar.
 - Endpoints de ejemplo para comprobar la inyección de configuración y secretos.
+- Tests automatizados y pipeline de GitHub Actions que publica la imagen en GHCR.
 
 ## Estructura
 
 ```
 .
 ├── src/
+│   ├── app.js           # Rutas y middlewares de Express
 │   ├── config.js        # Lectura y validación de variables de entorno
-│   └── server.js        # Servidor Express y endpoints
+│   └── server.js        # Arranque y apagado ordenado del servidor
+├── test/
+│   └── app.test.js      # Tests con el runner nativo de Node
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml    # Pipeline de GitHub Actions
 ├── .env.example         # Plantilla de variables (sí se versiona)
 ├── .env                 # Tus valores reales (NO se versiona)
 ├── Dockerfile
@@ -91,6 +98,51 @@ curl http://localhost:8091/health
 curl http://localhost:8091/config
 curl -H "x-api-key: clave-de-desarrollo-cambiar-en-produccion" http://localhost:8091/secure
 ```
+
+## Pipeline de GitHub Actions
+
+El workflow `.github/workflows/ci-cd.yml` se ejecuta en cada push y pull request hacia `main`, y también manualmente con `workflow_dispatch`.
+
+| Job       | Cuándo se ejecuta            | Qué hace                                                                 |
+| --------- | ---------------------------- | ------------------------------------------------------------------------ |
+| `test`    | Siempre                      | `npm ci`, tests con `node --test` y auditoría informativa de dependencias. |
+| `build`   | Tras `test`                  | Construye la imagen Docker y la escanea con Trivy (HIGH/CRITICAL).        |
+| `publish` | Solo push a `main`           | Publica la imagen en GitHub Container Registry (GHCR).                   |
+
+### Imágenes publicadas
+
+En cada push a `main` se generan estas etiquetas:
+
+```bash
+ghcr.io/<owner>/<repo>:latest
+ghcr.io/<owner>/<repo>:sha-<commit-corto>
+```
+
+No hace falta configurar secretos adicionales: el workflow usa el `GITHUB_TOKEN` con permiso `packages: write`.
+
+```bash
+docker pull ghcr.io/<owner>/<repo>:latest
+```
+
+> La primera vez, el paquete se crea como privado. Si quieres que sea público, cámbialo en **GitHub → Packages → tu paquete → Package settings → Change visibility**.
+
+### Badge de estado (opcional)
+
+Sustituye `OWNER/REPO` y añade esta línea al README:
+
+```markdown
+![CI/CD](https://github.com/OWNER/REPO/actions/workflows/ci-cd.yml/badge.svg)
+```
+
+### Probar el pipeline en local
+
+```bash
+npm ci
+npm test
+docker build -t docker-cicd-demo:local .
+```
+
+> Para producción, considera fijar cada action a un commit SHA en lugar de un tag mayor, y activar las reglas de protección de rama para exigir que el job `test` pase antes de hacer merge.
 
 ## Notas
 
