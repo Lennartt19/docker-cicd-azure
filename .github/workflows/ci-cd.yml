@@ -94,6 +94,6 @@ jobs:
         - name: Get ACR access token
           id: acr-token
           run: |
-            ACR_TOKEN=$(az acr login --name <registry-name> --expose-token --output tsv --query accessToken)
+            ACR_TOKEN=$(az acr login --name lennart19 --expose-token --output tsv --query accessToken)
             echo "::add-mask::$ACR_TOKEN" # mask the token in workflow logs
             echo "token=$ACR_TOKEN" >> "$GITHUB_OUTPUT"
