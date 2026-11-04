@@ -41,6 +41,7 @@ export const config = Object.freeze({
   nodeEnv: optional('NODE_ENV', 'development'),
   appName: optional('APP_NAME', 'docker-cicd-demo'),
   appGreeting: optional('APP_GREETING', 'Hola desde Docker'),
+  appVersion: optional('APP_VERSION', 'dev'),
   apiKey: required('API_KEY'),
   logLevel: toLogLevel(optional('LOG_LEVEL', 'info')),
 });

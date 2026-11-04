@@ -162,6 +162,7 @@ jobs:
       WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME || 'docker-cicd-app' }}
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'docker-cicd' }}
       APP_URL: https://${{ vars.AZURE_WEBAPP_NAME || 'docker-cicd-app' }}.azurewebsites.net
+      TARGET_VERSION: ${{ needs.publish.outputs.image_tag }}
     steps:
       - name: Login to Azure
         uses: azure/login@v3
@@ -188,22 +189,32 @@ jobs:
             --acr-use-identity true \
             --always-on true
 
+          # La API expone esta versión en /, /health y /config.
+          az webapp config appsettings set \
+            --name "$WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --settings APP_VERSION="$TARGET_VERSION" \
+            --output none
+
           az webapp restart --name "$WEBAPP_NAME" --resource-group "$RESOURCE_GROUP"
 
       - name: Esperar a que la nueva versión esté sana
         run: |
           for attempt in $(seq 1 30); do
-            status=$(curl -s -o /tmp/health.json -w '%{http_code}' "$APP_URL/health" || true)
-            if [ "$status" = "200" ]; then
-              echo "La aplicación está sana:"
-              cat /tmp/health.json
+            body=$(curl -fsS "$APP_URL/health" 2>/dev/null || true)
+            current=$(printf '%s' "$body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || true)
+
+            if [ "$current" = "$TARGET_VERSION" ]; then
+              echo "Versión $current desplegada y sana:"
+              printf '%s\n' "$body"
               exit 0
             fi
-            echo "Intento $attempt/30: HTTP $status. Esperando..."
+
+            echo "Intento $attempt/30: versión actual '${current:-sin respuesta}', esperada '$TARGET_VERSION'."
             sleep 10
           done
 
-          echo "La aplicación no respondió con HTTP 200 tras 5 minutos."
+          echo "La versión $TARGET_VERSION no quedó activa tras 5 minutos."
           exit 1
 
       - name: Escribir resumen del despliegue

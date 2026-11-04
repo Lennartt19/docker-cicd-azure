@@ -25,6 +25,7 @@ app.get('/', (req, res) => {
   res.json({
     message: config.appGreeting,
     app: config.appName,
+    version: config.appVersion,
     environment: config.nodeEnv,
     timestamp: new Date().toISOString(),
   });
@@ -34,6 +35,7 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
+    version: config.appVersion,
     uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
     timestamp: new Date().toISOString(),
   });
@@ -46,6 +48,7 @@ app.get('/config', (req, res) => {
     nodeEnv: config.nodeEnv,
     appName: config.appName,
     appGreeting: config.appGreeting,
+    appVersion: config.appVersion,
     logLevel: config.logLevel,
     apiKey: `${config.apiKey.slice(0, 3)}***`,
   });

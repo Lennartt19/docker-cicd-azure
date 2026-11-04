@@ -75,6 +75,7 @@ docker run --rm -p 8091:3000 --env-file .env docker-cicd-demo:local
 | `NODE_ENV`     | No          | `production`           | Entorno de ejecución (`development`, `production`, `test`).        |
 | `APP_NAME`     | No          | `docker-cicd-demo`     | Nombre mostrado por la API.                                        |
 | `APP_GREETING` | No          | `Hola desde Docker`    | Mensaje devuelto en la ruta raíz.                                  |
+| `APP_VERSION`  | No          | `dev`                  | Versión desplegada; se expone en `/`, `/health` y `/config`.       |
 | `API_KEY`      | **Sí**      | —                      | Secreto usado por el endpoint protegido `/secure`.                 |
 | `LOG_LEVEL`    | No          | `info`                 | Nivel de log: `debug`, `info`, `warn` o `error`.                   |
 
@@ -86,8 +87,8 @@ Si falta `API_KEY` o un valor no es válido, la aplicación falla al arrancar co
 
 | Método | Ruta      | Descripción                                                        |
 | ------ | --------- | ------------------------------------------------------------------ |
-| GET    | `/`       | Mensaje de bienvenida con nombre de app y entorno.                 |
-| GET    | `/health` | Estado de salud usado por el healthcheck de Docker.                |
+| GET    | `/`       | Mensaje de bienvenida con nombre, versión y entorno de la app.     |
+| GET    | `/health` | Estado de salud y versión desplegada (usado por el despliegue).    |
 | GET    | `/config` | Configuración no sensible (la API key aparece enmascarada).        |
 | GET    | `/secure` | Requiere la cabecera `x-api-key` con el valor de `API_KEY`.        |
 
@@ -164,7 +165,16 @@ Estas variables deben existir como *Application settings* en Azure:
 | `APP_NAME`      | `docker-cicd-demo`               |
 | `APP_GREETING`  | `Hola desde Azure Web App`       |
 | `LOG_LEVEL`     | `info`                           |
+| `APP_VERSION`   | Lo define el job `deploy` (`sha-<commit>`) |
 | `API_KEY`       | Secreto definido solo en Azure   |
+
+> `APP_VERSION` la actualiza el pipeline en cada despliegue con el tag inmutable de la imagen. El job `deploy` espera a que `/health` devuelva exactamente esa versión antes de dar el despliegue por bueno.
+>
+> Para comprobarlo manualmente:
+>
+> ```bash
+> curl https://docker-cicd-app-ahcramdrf6d8gdg0.chilecentral-01.azurewebsites.net/health
+> ```
 
 > `API_KEY` no está en el repositorio. Para rotarla:
 >
