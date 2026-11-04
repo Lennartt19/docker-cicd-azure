@@ -37,3 +37,36 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
         # Informativo en esta base; cambia a bloqueante quitando continue-on-error.
         continue-on-error: true
+        
+  build:
+    name: Build y escaneo
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v7
+
+      - name: Configurar Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Construir imagen
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: docker-cicd-demo:ci
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+      - name: Escanear vulnerabilidades
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: docker-cicd-demo:ci
+          format: table
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Mostrar tamaño de la imagen
+        run: docker image ls docker-cicd-demo:ci
