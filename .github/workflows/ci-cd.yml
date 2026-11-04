@@ -10,15 +10,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   NODE_VERSION: "22"
   REGISTRY: lennart19.azurecr.io
-  IMAGE_NAME: ${{ github.repository }}
-  
+
 jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Descargar código
         uses: actions/checkout@v7
@@ -39,10 +43,11 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
         # Informativo en esta base; cambia a bloqueante quitando continue-on-error.
         continue-on-error: true
-        
+
   build:
     name: Build y escaneo
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: test
     steps:
       - name: Descargar código
@@ -68,66 +73,143 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-          # exit-code: "1"
+          # Informativo por ahora. Cambia a "1" para bloquear el pipeline.
           exit-code: "0"
-          
+
       - name: Mostrar tamaño de la imagen
         run: docker image ls docker-cicd-demo:ci
 
   publish:
-      name: Publicar en GHCR
-      runs-on: ubuntu-latest
-      needs: build
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      permissions:
-        contents: read
-        #packages: write
-        id-token: write
-      steps:
-        - name: Descargar código
-          uses: actions/checkout@v7
-        
-        - name: Configurar Buildx
-          uses: docker/setup-buildx-action@v4
-      
-        - name: Login to Azure
-          uses: azure/login@v3
-          with:
-            client-id: ${{ secrets.AZURE_CLIENT_ID }}
-            tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-            subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          
-        - name: Get ACR access token
-          id: acr-token
-          run: |
-            ACR_TOKEN=$(az acr login --name lennart19 --expose-token --output tsv --query accessToken)
-            echo "::add-mask::$ACR_TOKEN" # mask the token in workflow logs
-            echo "token=$ACR_TOKEN" >> "$GITHUB_OUTPUT"
+    name: Publicar en ACR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_name: ${{ steps.image.outputs.name }}
+      image_tag: ${{ steps.image.outputs.tag }}
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v7
 
-        - name: Login to ACR
-          uses: docker/login-action@v4
-          with:
-            registry: ${{ env.REGISTRY }}
-            username: 00000000-0000-0000-0000-000000000000
-            password: ${{ steps.acr-token.outputs.token }}
+      - name: Configurar Buildx
+        uses: docker/setup-buildx-action@v4
 
-        - name: Generar metadatos de la imagen
-          id: meta
-          uses: docker/metadata-action@v6
-          with:
-            images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-            tags: |
-              type=sha,format=short,prefix=sha-
-              type=raw,value=latest
+      - name: Calcular nombre y tag de la imagen
+        id: image
+        run: |
+          echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-        - name: Construir y publicar imagen
-          uses: docker/build-push-action@v7
-          with:
-            context: .
-            push: true
-            tags: ${{ steps.meta.outputs.tags }}
-            labels: ${{ steps.meta.outputs.labels }}
-            cache-from: type=gha,scope=app
-            cache-to: type=gha,mode=max,scope=app
-            provenance: true
-            sbom: true
+      - name: Login to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get ACR access token
+        id: acr-token
+        run: |
+          ACR_TOKEN=$(az acr login --name lennart19 --expose-token --output tsv --query accessToken)
+          echo "::add-mask::$ACR_TOKEN"
+          echo "token=$ACR_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ACR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: 00000000-0000-0000-0000-000000000000
+          password: ${{ steps.acr-token.outputs.token }}
+
+      - name: Generar metadatos de la imagen
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=${{ steps.image.outputs.tag }}
+            type=raw,value=latest
+
+      - name: Construir y publicar imagen
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+          provenance: true
+          sbom: true
+
+  deploy:
+    name: Desplegar en Azure Web App
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://${{ vars.AZURE_WEBAPP_NAME || 'docker-cicd-app' }}.azurewebsites.net
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME || 'docker-cicd-app' }}
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'docker-cicd' }}
+      APP_URL: https://${{ vars.AZURE_WEBAPP_NAME || 'docker-cicd-app' }}.azurewebsites.net
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Actualizar imagen en App Service
+        run: |
+          IMAGE="${REGISTRY}/${{ needs.publish.outputs.image_name }}:${{ needs.publish.outputs.image_tag }}"
+          echo "Desplegando $IMAGE"
+
+          az webapp config container set \
+            --name "$WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --container-image-name "$IMAGE" \
+            --container-registry-url "https://${REGISTRY}"
+
+          # La Web App tiene asignada la identidad docker-github-cicd con AcrPull.
+          az webapp config set \
+            --name "$WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --acr-use-identity true \
+            --always-on true
+
+          az webapp restart --name "$WEBAPP_NAME" --resource-group "$RESOURCE_GROUP"
+
+      - name: Esperar a que la nueva versión esté sana
+        run: |
+          for attempt in $(seq 1 30); do
+            status=$(curl -s -o /tmp/health.json -w '%{http_code}' "$APP_URL/health" || true)
+            if [ "$status" = "200" ]; then
+              echo "La aplicación está sana:"
+              cat /tmp/health.json
+              exit 0
+            fi
+            echo "Intento $attempt/30: HTTP $status. Esperando..."
+            sleep 10
+          done
+
+          echo "La aplicación no respondió con HTTP 200 tras 5 minutos."
+          exit 1
+
+      - name: Escribir resumen del despliegue
+        run: |
+          echo "## Despliegue completado" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Imagen:** \`${REGISTRY}/${{ needs.publish.outputs.image_name }}:${{ needs.publish.outputs.image_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Web App:** $APP_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Health:** $APP_URL/health" >> "$GITHUB_STEP_SUMMARY"

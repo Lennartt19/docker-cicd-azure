@@ -6,7 +6,7 @@ API sencilla con Node.js + Express preparada para dockerizar. Incluye:
 - `docker-compose.yml` con `env_file`, healthcheck y reinicio automático.
 - Validación de variables de entorno al arrancar.
 - Endpoints de ejemplo para comprobar la inyección de configuración y secretos.
-- Tests automatizados y pipeline de GitHub Actions que publica la imagen en GHCR.
+- Tests automatizados y pipeline de GitHub Actions que publica en ACR y despliega en Azure Web App.
 
 ## Estructura
 
@@ -23,7 +23,7 @@ API sencilla con Node.js + Express preparada para dockerizar. Incluye:
 │       └── ci-cd.yml    # Pipeline de GitHub Actions
 ├── .env.example         # Plantilla de variables (sí se versiona)
 ├── .env                 # Tus valores reales (NO se versiona)
-├── Dockerfile
+├── dockerfile
 ├── docker-compose.yml
 └── package.json
 ```
@@ -99,32 +99,79 @@ curl http://localhost:8091/config
 curl -H "x-api-key: clave-de-desarrollo-cambiar-en-produccion" http://localhost:8091/secure
 ```
 
-## Pipeline de GitHub Actions
+## Pipeline de GitHub Actions y despliegue en Azure
 
 El workflow `.github/workflows/ci-cd.yml` se ejecuta en cada push y pull request hacia `main`, y también manualmente con `workflow_dispatch`.
 
-| Job       | Cuándo se ejecuta            | Qué hace                                                                 |
-| --------- | ---------------------------- | ------------------------------------------------------------------------ |
-| `test`    | Siempre                      | `npm ci`, tests con `node --test` y auditoría informativa de dependencias. |
-| `build`   | Tras `test`                  | Construye la imagen Docker y la escanea con Trivy (HIGH/CRITICAL).        |
-| `publish` | Solo push a `main`           | Publica la imagen en GitHub Container Registry (GHCR).                   |
+| Job       | Cuándo se ejecuta  | Qué hace                                                                  |
+| --------- | ------------------ | ------------------------------------------------------------------------- |
+| `test`    | Siempre            | `npm ci`, tests con `node --test` y auditoría informativa de dependencias. |
+| `build`   | Tras `test`        | Construye la imagen Docker y la escanea con Trivy (HIGH/CRITICAL).         |
+| `publish` | Solo push a `main` | Publica la imagen en Azure Container Registry (ACR).                      |
+| `deploy`  | Solo push a `main` | Actualiza la imagen de Azure Web App y verifica `/health`.                |
 
-### Imágenes publicadas
+### Imágenes publicadas en ACR
 
 En cada push a `main` se generan estas etiquetas:
 
-```bash
-ghcr.io/<owner>/<repo>:latest
-ghcr.io/<owner>/<repo>:sha-<commit-corto>
+```text
+lennart19.azurecr.io/lennartt19/docker-cicd-azure:sha-<commit-corto>
+lennart19.azurecr.io/lennartt19/docker-cicd-azure:latest
 ```
 
-No hace falta configurar secretos adicionales: el workflow usa el `GITHUB_TOKEN` con permiso `packages: write`.
+El job `deploy` usa siempre el tag `sha-<commit-corto>`, no `latest`. Así Azure detecta un cambio de imagen real y no reutiliza una versión cacheada.
 
 ```bash
-docker pull ghcr.io/<owner>/<repo>:latest
+az acr login --name lennart19
+docker pull lennart19.azurecr.io/lennartt19/docker-cicd-azure:latest
 ```
 
-> La primera vez, el paquete se crea como privado. Si quieres que sea público, cámbialo en **GitHub → Packages → tu paquete → Package settings → Change visibility**.
+### Recursos de Azure
+
+| Recurso                 | Nombre                                                        |
+| ----------------------- | ------------------------------------------------------------- |
+| Resource group          | `docker-cicd`                                                 |
+| Azure Container Registry | `lennart19.azurecr.io`                                       |
+| App Service Plan        | `ASP-dockercicd-bfbc` (Linux, B1)                             |
+| Web App                 | `docker-cicd-app`                                             |
+| URL pública             | `https://docker-cicd-app-ahcramdrf6d8gdg0.chilecentral-01.azurewebsites.net` |
+| Identidad administrada  | `docker-github-cicd` con `AcrPull` sobre el ACR y `Website Contributor` sobre la Web App |
+
+La Web App descarga la imagen usando su identidad administrada (`acrUseManagedIdentityCreds=true`), por lo que **no se guardan contraseñas ni PAT del registro** en GitHub.
+
+### Secrets y variables de GitHub
+
+Secrets necesarios para el login OIDC con Azure:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+
+Variables opcionales (el workflow ya trae estos valores por defecto):
+
+- `AZURE_WEBAPP_NAME` → `docker-cicd-app`
+- `AZURE_RESOURCE_GROUP` → `docker-cicd`
+
+### Configuración de la Web App
+
+Estas variables deben existir como *Application settings* en Azure:
+
+| Setting         | Valor                            |
+| --------------- | -------------------------------- |
+| `WEBSITES_PORT` | `3000`                           |
+| `PORT`          | `3000`                           |
+| `NODE_ENV`      | `production`                     |
+| `APP_NAME`      | `docker-cicd-demo`               |
+| `APP_GREETING`  | `Hola desde Azure Web App`       |
+| `LOG_LEVEL`     | `info`                           |
+| `API_KEY`       | Secreto definido solo en Azure   |
+
+> `API_KEY` no está en el repositorio. Para rotarla:
+>
+> ```bash
+> az webapp config appsettings set -g docker-cicd -n docker-cicd-app \
+>   --settings API_KEY="nueva-clave-segura"
+> ```
 
 ### Badge de estado (opcional)
 

@@ -2,7 +2,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: dockerfile
     image: docker-cicd-demo:local
     container_name: docker-cicd-demo
     restart: unless-stopped
